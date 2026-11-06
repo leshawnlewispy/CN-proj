@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Adaptive Load Balancer</title>
+<style>
+:root{
+  --bg:#FBFBFD; --surface:#FFFFFF; --fill:#F5F5F7; --line:#D2D2D7; --ink:#1D1D1F; --muted:#6E6E73;
+  --accent:#0071E3; --static:#86868B; --s1:#0071E3; --s2:#C45F00; --s3:#8944AB; --err:#D70015; --warn:#C45F00; --good:#248A3D;
+  --nav:rgba(251,251,253,.72); --shadow:0 1px 2px rgba(0,0,0,.04), 0 8px 24px rgba(0,0,0,.05);
+  --sans:-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --display:-apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --mono:ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#000000; --surface:#1C1C1E; --fill:#2C2C2E; --line:#38383A; --ink:#F5F5F7; --muted:#A1A1A6;
+    --accent:#2997FF; --static:#8E8E93; --s1:#2997FF; --s2:#D67A00; --s3:#BF5AF2; --err:#FF453A; --warn:#FF9F0A; --good:#30D158;
+    --nav:rgba(22,22,23,.72); --shadow:none; color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#000000; --surface:#1C1C1E; --fill:#2C2C2E; --line:#38383A; --ink:#F5F5F7; --muted:#A1A1A6;
+  --accent:#2997FF; --static:#8E8E93; --s1:#2997FF; --s2:#D67A00; --s3:#BF5AF2; --err:#FF453A; --warn:#FF9F0A; --good:#30D158;
+  --nav:rgba(22,22,23,.72); --shadow:none; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg); color:var(--ink); font:17px/1.47 var(--sans); letter-spacing:-.01em; -webkit-font-smoothing:antialiased}
+img,svg{max-width:100%}
+[hidden]{display:none!important}
+
+/* translucent nav: content scrolls under it */
+.nav{position:sticky; top:env(safe-area-inset-top,0px); z-index:10; background:var(--nav); backdrop-filter:saturate(180%) blur(20px); -webkit-backdrop-filter:saturate(180%) blur(20px); border-bottom:1px solid color-mix(in srgb, var(--line) 60%, transparent)}
+@media (prefers-reduced-transparency: reduce){.nav{background:var(--bg); backdrop-filter:none; -webkit-backdrop-filter:none}}
+.nav-in{max-width:1180px; margin:0 auto; padding:10px 20px; display:flex; align-items:center; gap:16px}
+.brand{font:600 17px var(--display); letter-spacing:-.02em; white-space:nowrap}
+.seg{position:relative; display:flex; gap:2px; background:var(--fill); border-radius:10px; padding:2px; overflow-x:auto; scrollbar-width:none; flex:1; min-width:0}
+.seg::-webkit-scrollbar{display:none}
+.seg button{position:relative; z-index:1; flex:none; border:0; background:none; color:var(--ink); font:500 13px var(--sans); padding:6px 12px; border-radius:8px; cursor:pointer; white-space:nowrap}
+.seg .pill{position:absolute; top:2px; bottom:2px; left:0; width:0; background:var(--surface); border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,.12); z-index:0; will-change:transform,width}
+.conn{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); white-space:nowrap}
+.conn i{width:8px; height:8px; border-radius:50%; background:var(--static)}
+.conn.live i{background:var(--good)}
+
+main{max-width:1180px; margin:0 auto; padding-inline:20px; padding-block:40px 80px}
+.page{display:flex; flex-direction:column; gap:28px}
+.eyebrow{font-size:14px; font-weight:600; color:var(--accent); margin:0; letter-spacing:0}
+h1{font:700 clamp(40px,6.4vw,76px)/1.04 var(--display); letter-spacing:-.03em; margin:0; text-wrap:balance}
+h2{font:700 clamp(30px,4.2vw,48px)/1.08 var(--display); letter-spacing:-.025em; margin:0; text-wrap:balance}
+h3{font:600 21px/1.2 var(--display); letter-spacing:-.015em; margin:0}
+.lede{font-size:21px; line-height:1.4; color:var(--muted); margin:0; max-width:62ch; letter-spacing:-.015em}
+p{margin:0}
+.head{display:flex; flex-direction:column; gap:10px}
+.card{background:var(--surface); border:1px solid color-mix(in srgb, var(--line) 55%, transparent); border-radius:20px; padding:24px; display:flex; flex-direction:column; gap:14px; box-shadow:var(--shadow); min-width:0}
+.grid2{display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px}
+.grid3{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px}
+@media (max-width:860px){.grid2,.grid3{grid-template-columns:1fr}}
+.muted{color:var(--muted)}
+.small{font-size:13px; letter-spacing:.005em}
+ul.plain{margin:0; padding-left:18px; display:flex; flex-direction:column; gap:6px}
+
+/* buttons respond on press */
+.btn{font:500 15px var(--sans); border:0; border-radius:980px; padding:10px 20px; cursor:pointer; background:var(--accent); color:#fff; transition:transform 100ms ease-out, opacity 120ms; align-self:flex-start}
+.btn:active{transform:scale(.97)}
+.btn.ghost{background:var(--fill); color:var(--ink)}
+.btn[disabled]{opacity:.45; cursor:not-allowed; transform:none}
+.btn:focus-visible,.seg button:focus-visible,.chip:focus-visible{outline:3px solid var(--accent); outline-offset:2px}
+.chips{display:flex; gap:6px; flex-wrap:wrap}
+.chip{font:500 13px var(--sans); border:1px solid var(--line); background:var(--surface); color:var(--ink); border-radius:980px; padding:5px 12px; cursor:pointer; transition:transform 100ms ease-out}
+.chip:active{transform:scale(.97)}
+.chip[aria-pressed="true"]{background:var(--ink); color:var(--bg); border-color:var(--ink)}
+.bar{height:6px; background:var(--fill); border-radius:3px; overflow:hidden}
+.bar i{display:block; height:100%; width:0; background:var(--accent); border-radius:3px; transition:width .6s ease}
+pre.log{margin:0; font:12px/1.5 var(--mono); background:var(--fill); border-radius:12px; padding:12px; max-height:140px; overflow:auto; white-space:pre-wrap; color:var(--muted)}
+.source{align-self:flex-start; font-size:13px; font-weight:500; border-radius:980px; padding:5px 12px; background:var(--fill); color:var(--muted)}
+.source.live{color:var(--good)}
+
+/* big numbers */
+.tiles{display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:20px}
+@media (max-width:640px){.tiles{grid-template-columns:1fr}}
+.tile{display:flex; flex-direction:column; gap:4px}
+.tile .v{font:700 clamp(36px,5vw,56px)/1 var(--display); letter-spacing:-.03em; font-variant-numeric:tabular-nums}
+.tile .l{font-size:14px; color:var(--muted)}
+.tile.accent .v{color:var(--accent)}
+
+/* charts */
+.chart svg{display:block; width:100%; height:auto; overflow:visible}
+.chart text{font:12px var(--sans); fill:var(--muted)}
+.chart .val{font:600 13px var(--sans); fill:var(--ink); font-variant-numeric:tabular-nums}
+.chart .grid{stroke:var(--line); stroke-width:1}
+.legend{display:flex; gap:14px; flex-wrap:wrap; font-size:13px; color:var(--muted)}
+.legend span{display:inline-flex; align-items:center; gap:6px}
+.legend i{width:10px; height:10px; border-radius:3px; display:inline-block}
+.tip{position:absolute; pointer-events:none; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:12px; box-shadow:0 4px 16px rgba(0,0,0,.12); white-space:nowrap; font-variant-numeric:tabular-nums; z-index:5}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse; width:100%; font-size:15px; font-variant-numeric:tabular-nums}
+th,td{text-align:left; padding:10px 12px; border-bottom:1px solid color-mix(in srgb, var(--line) 60%, transparent)}
+th{font-size:13px; font-weight:600; color:var(--muted)}
+td.num,th.num{text-align:right}
+
+/* animation */
+.anim .panels{display:grid; grid-template-columns:1fr 1fr; gap:16px}
+@media (max-width:760px){.anim .panels{grid-template-columns:1fr}}
+.anim canvas{width:100%; aspect-ratio:16/9; display:block; border-radius:14px; background:var(--fill)}
+.anim .ph{display:flex; justify-content:space-between; font-size:14px; gap:8px}
+.anim .ph b{font-weight:600}
+.anim .row{display:flex; gap:12px; align-items:center; flex-wrap:wrap}
+.anim .tl{flex:1; min-width:160px; height:6px; background:var(--fill); border-radius:3px; position:relative}
+.anim .tl .f{position:absolute; inset:0 auto 0 0; width:0; background:var(--accent); border-radius:3px}
+.anim .tl .m{position:absolute; top:-4px; width:2px; height:14px; background:var(--warn)}
+.anim .clock{font:12px var(--mono); color:var(--muted); min-width:84px; text-align:right}
+.anim .stats{display:flex; gap:20px; font-size:13px; color:var(--muted); font-variant-numeric:tabular-nums}
+.anim .stats b{color:var(--ink); font-weight:600}
+
+/* steps + topology */
+.steps{display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:14px}
+@media (max-width:900px){.steps{grid-template-columns:1fr 1fr}}
+@media (max-width:520px){.steps{grid-template-columns:1fr}}
+.step .n{font:700 28px var(--display); color:var(--accent)}
+.formula{font:600 clamp(18px,2.4vw,26px)/1.3 var(--mono); letter-spacing:-.01em}
+.topo text{font:600 13px var(--sans)}
+.hero{padding-block:24px 8px}
+@media (prefers-reduced-motion: reduce){ .bar i,.btn,.chip{transition:none} }
+</style>
+</head>
+<body>
+<header class="nav">
+  <div class="nav-in">
+    <span class="brand">Adaptive LB</span>
+    <nav class="seg" id="tabs" aria-label="Sections"><span class="pill" id="pill"></span></nav>
+    <span class="conn" id="conn"><i></i><span>Checking…</span></span>
+  </div>
+</header>
+<main id="main"></main>
+
+<script>
+const REF = [{"scenario":"E1","mode":"adaptive","threads":4,"duration":30.0,"finished":1790341633.0253937,"event_offset":null,"summary":{"requests":1986,"error_pct":0.0,"throughput":66.2,"mean_ms":130.8,"p95_ms":161.9,"p95_after_ms":161.9,"share":{"srv1":0.332,"srv2":0.322,"srv3":0.346},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[24,25,23,25,20,25,23,22,22,23,21,20,24,20,20,19,17,25,24,20,22,21,22,27,21,18,24,22,23,18,0,0],"srv2":[22,19,23,23,23,22,22,24,21,22,23,21,20,23,21,22,20,18,21,22,22,22,21,18,20,22,21,21,19,21,0,0],"srv3":[23,24,23,25,27,21,22,25,23,22,23,23,23,22,21,24,24,21,20,22,24,22,24,18,24,27,22,22,20,26,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E1","mode":"static","threads":4,"duration":30.0,"finished":1790341588.8864062,"event_offset":null,"summary":{"requests":2017,"error_pct":0.0,"throughput":67.2,"mean_ms":128.1,"p95_ms":152.4,"p95_after_ms":152.4,"share":{"srv1":0.334,"srv2":0.333,"srv3":0.333},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[24,24,22,24,23,22,23,23,22,23,22,22,22,22,22,23,23,20,23,21,23,22,23,22,23,22,22,21,22,22,1,0],"srv2":[24,23,23,23,23,22,24,23,22,23,22,22,22,21,23,23,23,20,22,22,22,23,23,22,22,22,23,21,22,21,1,0],"srv3":[24,23,22,24,23,22,23,23,23,22,23,21,22,22,22,23,23,21,22,22,22,23,23,22,22,22,23,21,22,21,1,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E2","mode":"adaptive","threads":4,"duration":30.0,"finished":1790341722.3295758,"event_offset":null,"summary":{"requests":1841,"error_pct":0.0,"throughput":61.4,"mean_ms":145.3,"p95_ms":249.7,"p95_after_ms":249.7,"share":{"srv1":0.445,"srv2":0.434,"srv3":0.121},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[30,31,27,26,29,29,27,27,27,27,27,23,28,24,27,29,27,32,26,28,25,30,28,27,27,22,27,25,29,28,1,0],"srv2":[28,29,27,30,26,28,26,28,28,26,24,30,24,28,28,29,28,25,26,23,28,25,25,24,26,25,25,28,23,29,0,0],"srv3":[7,7,7,9,7,8,9,7,8,8,8,8,7,7,7,6,5,5,7,10,5,7,9,7,8,9,8,7,8,7,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E2","mode":"static","threads":4,"duration":30.0,"finished":1790341677.7725267,"event_offset":null,"summary":{"requests":915,"error_pct":0.0,"throughput":30.5,"mean_ms":347.6,"p95_ms":868.3,"p95_after_ms":868.3,"share":{"srv1":0.333,"srv2":0.333,"srv3":0.333},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[17,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,9,10,10,10,10,10,10,10,10,10,10,9,10,0,0],"srv2":[16,11,10,10,10,10,10,10,9,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,9,10,10,10,0,0],"srv3":[16,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,9,10,10,10,10,10,10,10,10,10,10,10,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E3","mode":"adaptive","threads":4,"duration":30.0,"finished":1790341806.881595,"event_offset":10.0,"summary":{"requests":1850,"error_pct":0.0,"throughput":61.7,"mean_ms":144.1,"p95_ms":201.0,"p95_after_ms":212.2,"share":{"srv1":0.124,"srv2":0.426,"srv3":0.45},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[24,24,23,20,23,22,21,23,22,22,5,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"srv2":[25,21,21,23,23,24,24,21,24,24,19,28,22,27,30,27,27,29,30,32,25,26,27,27,30,32,33,28,29,30,1,0],"srv3":[24,24,27,26,26,24,25,26,21,22,25,29,32,30,27,30,31,31,27,26,28,34,31,30,28,29,27,31,34,27,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E3","mode":"static","threads":4,"duration":30.0,"finished":1790341766.8851473,"event_offset":10.0,"summary":{"requests":1459,"error_pct":0.0,"throughput":48.6,"mean_ms":198.3,"p95_ms":594.0,"p95_after_ms":715.1,"share":{"srv1":0.334,"srv2":0.333,"srv3":0.333},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[24,24,23,24,23,23,22,23,23,23,12,12,12,13,12,11,11,13,13,14,13,13,13,13,13,15,13,11,14,13,1,0],"srv2":[24,24,23,23,23,23,23,23,23,22,12,13,12,13,11,12,11,13,13,14,12,13,14,13,12,15,13,12,14,13,0,0],"srv3":[24,23,24,23,23,23,23,22,24,22,12,12,13,13,11,11,12,13,13,14,12,13,13,13,13,15,13,12,13,14,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E4","mode":"adaptive","threads":4,"duration":30.0,"finished":1790341887.035634,"event_offset":10.0,"summary":{"requests":1996,"error_pct":3.3,"throughput":64.3,"mean_ms":127.3,"p95_ms":153.0,"p95_after_ms":156.3,"share":{"srv1":0.437,"srv2":0.113,"srv3":0.449},"errors_after_event":64,"error_window_s":3.2},"timeline":{"srv1":[22,23,23,23,22,21,22,21,23,25,18,21,21,31,32,32,33,35,32,33,32,34,33,33,32,34,34,29,37,33,0,0],"srv2":[26,21,20,26,24,23,21,21,21,16,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"srv3":[25,27,25,21,24,25,27,24,25,23,22,18,21,30,35,33,32,34,37,34,33,33,31,33,35,32,30,37,28,32,1,0],"err":[0,0,0,0,0,0,0,0,0,3,19,20,20,4,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E4","mode":"static","threads":4,"duration":30.0,"finished":1790341847.005308,"event_offset":10.0,"summary":{"requests":1911,"error_pct":21.4,"throughput":50.1,"mean_ms":119.7,"p95_ms":136.9,"p95_after_ms":130.0,"share":{"srv1":0.424,"srv2":0.152,"srv3":0.424},"errors_after_event":405,"error_window_s":20.0},"timeline":{"srv1":[24,23,24,23,23,23,24,23,22,24,19,21,19,21,20,20,20,20,20,20,21,21,20,20,20,21,20,20,20,21,0,0],"srv2":[23,23,24,23,24,23,23,23,23,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],"srv3":[23,23,24,23,23,24,23,23,23,23,20,20,20,20,20,20,20,20,21,20,20,21,20,20,21,20,20,20,21,20,1,0],"err":[0,0,0,0,0,0,0,0,0,3,20,20,20,20,20,21,19,20,21,20,20,21,20,20,21,20,20,21,20,21,0,0]}},{"scenario":"E5","mode":"adaptive","threads":4,"duration":30.0,"finished":1790341971.277108,"event_offset":10.0,"summary":{"requests":1956,"error_pct":0.0,"throughput":65.2,"mean_ms":133.9,"p95_ms":165.0,"p95_after_ms":170.4,"share":{"srv1":0.254,"srv2":0.253,"srv3":0.494},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[23,24,24,27,22,23,26,19,22,22,19,15,14,11,11,14,16,15,13,14,15,15,12,12,10,15,14,9,10,10,0,0],"srv2":[25,19,23,20,24,23,18,23,21,22,22,13,11,13,16,11,13,14,13,17,13,13,14,15,11,15,14,16,12,10,0,0],"srv3":[24,25,24,23,25,21,24,25,23,23,24,34,35,40,36,36,36,36,39,35,40,37,38,35,42,37,33,37,36,43,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E5","mode":"static","threads":4,"duration":30.0,"finished":1790341927.0681956,"event_offset":10.0,"summary":{"requests":1924,"error_pct":0.0,"throughput":64.1,"mean_ms":137.0,"p95_ms":177.9,"p95_after_ms":184.3,"share":{"srv1":0.334,"srv2":0.333,"srv3":0.333},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[25,23,23,24,23,22,24,23,23,22,20,20,20,18,21,20,21,20,19,20,22,20,21,22,21,21,22,21,21,19,1,0],"srv2":[24,23,24,23,23,23,23,24,22,22,21,19,20,19,20,21,21,19,19,21,22,20,21,22,20,22,21,22,20,20,0,0],"srv3":[24,23,24,23,23,23,23,23,23,22,20,20,20,19,20,21,21,19,19,21,21,21,21,21,21,21,22,21,21,20,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E6","mode":"adaptive","threads":1,"duration":30.0,"finished":1790342059.3241737,"event_offset":null,"summary":{"requests":568,"error_pct":0.0,"throughput":18.9,"mean_ms":108.7,"p95_ms":113.6,"p95_after_ms":113.6,"share":{"srv1":0.313,"srv2":0.335,"srv3":0.352},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[9,6,7,7,5,7,6,4,8,6,5,5,5,5,6,5,6,6,4,7,5,6,5,6,8,6,7,5,5,6,0,0],"srv2":[6,6,7,5,7,5,5,7,6,6,7,7,9,5,5,6,6,7,8,4,8,8,7,6,5,6,5,7,7,6,1,0],"srv3":[6,6,4,8,7,7,8,8,5,7,7,6,6,8,8,8,7,5,7,7,7,4,7,8,5,6,8,7,6,7,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E6","mode":"adaptive","threads":2,"duration":30.0,"finished":1790342147.5822642,"event_offset":null,"summary":{"requests":1111,"error_pct":0.0,"throughput":37.0,"mean_ms":112.3,"p95_ms":121.4,"p95_after_ms":121.4,"share":{"srv1":0.324,"srv2":0.324,"srv3":0.352},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[13,11,13,14,13,10,13,12,12,11,12,10,12,13,12,14,12,12,12,12,11,12,10,12,12,13,11,12,12,11,1,0],"srv2":[11,14,11,12,12,12,11,12,13,12,13,12,12,12,13,11,12,12,12,12,12,12,12,10,11,12,12,12,13,12,1,0],"srv3":[15,13,13,11,13,15,13,13,12,14,13,15,13,13,13,12,12,12,12,12,13,13,14,14,13,13,14,13,11,13,1,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E6","mode":"adaptive","threads":4,"duration":30.0,"finished":1790342235.6898103,"event_offset":null,"summary":{"requests":2037,"error_pct":0.0,"throughput":67.9,"mean_ms":126.4,"p95_ms":149.4,"p95_after_ms":149.4,"share":{"srv1":0.318,"srv2":0.326,"srv3":0.356},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[27,23,24,23,23,22,19,22,20,21,21,24,18,22,19,20,21,22,22,21,20,22,22,18,22,20,22,23,22,23,0,0],"srv2":[22,23,24,22,23,23,22,23,19,21,23,22,24,21,23,20,19,22,24,23,22,21,23,25,18,23,20,22,24,21,2,0],"srv3":[23,23,24,23,24,25,27,24,27,26,24,23,21,24,25,28,25,25,21,25,24,24,21,24,25,23,27,23,23,23,1,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E6","mode":"adaptive","threads":8,"duration":30.0,"finished":1790342323.9510603,"event_offset":null,"summary":{"requests":3112,"error_pct":0.0,"throughput":103.7,"mean_ms":180.4,"p95_ms":258.5,"p95_after_ms":258.5,"share":{"srv1":0.324,"srv2":0.324,"srv3":0.353},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[42,32,39,33,31,35,30,40,35,40,34,36,31,25,29,31,31,34,36,38,34,35,28,28,32,36,35,34,33,29,2,0],"srv2":[45,39,37,35,35,40,36,32,31,32,35,30,36,33,37,29,33,29,27,28,29,32,33,28,31,37,34,35,32,35,2,0],"srv3":[37,46,42,42,45,42,39,39,32,39,40,41,34,44,28,30,33,37,30,34,35,35,35,41,34,30,30,32,37,34,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E6","mode":"static","threads":1,"duration":30.0,"finished":1790342015.267515,"event_offset":null,"summary":{"requests":565,"error_pct":0.0,"throughput":18.8,"mean_ms":109.4,"p95_ms":113.3,"p95_after_ms":113.3,"share":{"srv1":0.335,"srv2":0.333,"srv3":0.333},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[7,6,6,7,6,6,7,6,6,7,6,6,6,7,6,6,7,6,6,6,7,6,6,6,7,6,6,6,7,6,0,0],"srv2":[7,6,6,6,7,6,6,6,7,6,6,6,7,6,6,7,6,6,6,7,6,6,6,7,6,6,7,6,6,6,0,0],"srv3":[7,6,6,6,7,6,6,6,7,6,6,6,7,6,6,6,7,6,6,6,7,6,6,6,7,6,6,6,7,6,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E6","mode":"static","threads":2,"duration":30.0,"finished":1790342103.4938202,"event_offset":null,"summary":{"requests":1115,"error_pct":0.0,"throughput":37.2,"mean_ms":111.5,"p95_ms":119.2,"p95_after_ms":119.2,"share":{"srv1":0.334,"srv2":0.333,"srv3":0.334},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[13,12,12,13,13,12,13,13,12,13,12,12,12,13,12,12,12,13,13,12,12,12,13,12,12,12,13,12,12,12,1,0],"srv2":[13,12,12,13,12,13,13,12,13,12,13,12,12,13,12,12,12,13,13,12,12,12,12,12,13,12,12,12,12,13,0,0],"srv3":[12,13,12,13,12,13,13,12,13,12,12,12,13,12,12,13,12,13,12,12,13,12,13,12,12,13,12,12,12,13,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E6","mode":"static","threads":4,"duration":30.0,"finished":1790342191.6230621,"event_offset":null,"summary":{"requests":2013,"error_pct":0.0,"throughput":67.1,"mean_ms":128.3,"p95_ms":152.6,"p95_after_ms":152.6,"share":{"srv1":0.333,"srv2":0.333,"srv3":0.333},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[24,24,23,24,22,23,23,23,22,22,22,23,21,22,23,22,23,22,21,22,22,21,23,21,23,22,22,22,22,22,0,0],"srv2":[24,23,24,23,23,23,22,23,23,22,22,22,22,22,22,23,23,22,21,22,21,22,22,22,22,23,21,23,22,22,0,0],"srv3":[24,23,23,24,22,24,22,23,23,22,21,23,21,22,23,22,24,21,22,22,21,22,22,22,22,22,22,23,21,23,0,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}},{"scenario":"E6","mode":"static","threads":8,"duration":30.0,"finished":1790342279.7837846,"event_offset":null,"summary":{"requests":3067,"error_pct":0.0,"throughput":102.2,"mean_ms":183.7,"p95_ms":259.7,"p95_after_ms":259.7,"share":{"srv1":0.334,"srv2":0.333,"srv3":0.333},"errors_after_event":0,"error_window_s":0.0},"timeline":{"srv1":[42,39,36,38,38,36,33,35,34,34,32,34,33,32,32,31,30,33,32,34,32,33,35,33,33,32,35,34,33,33,2,0],"srv2":[42,39,36,38,38,36,33,34,34,35,31,35,33,32,32,31,30,33,32,33,33,33,35,32,34,32,35,34,33,33,1,0],"srv3":[42,38,37,38,37,36,33,35,34,34,32,34,34,32,31,31,30,34,32,33,33,32,35,33,34,31,36,33,34,33,1,0],"err":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}}];
+const SRV = ['srv1','srv2','srv3'];
+const PAGES = [
+  {id:'overview', tab:'Overview'}, {id:'how', tab:'How it works'},
+  {id:'e1', tab:'E1'}, {id:'e2', tab:'E2'}, {id:'e3', tab:'E3'}, {id:'e4', tab:'E4'}, {id:'e5', tab:'E5'}, {id:'e6', tab:'E6'},
+  {id:'tests', tab:'Tests'}
+];
+const METRIC = {
+  throughput:{label:'Throughput', unit:'req/s', better:'higher'},
+  mean_ms:{label:'Mean latency', unit:'ms', better:'lower'},
+  p95_ms:{label:'p95 latency', unit:'ms', better:'lower'},
+  p95_after_ms:{label:'p95 latency after the event', unit:'ms', better:'lower'},
+  error_pct:{label:'Failed requests', unit:'%', better:'lower'},
+  error_window_s:{label:'Errors lasted after the kill', unit:'s', better:'lower'},
+  'share.srv1':{label:'Share of requests to srv1', unit:'%'},
+  'share.srv3':{label:'Share of requests to srv3', unit:'%'}
+};
+const EXP = {
+  e1:{sc:'E1', name:'Balanced load', title:'Equal servers perform the same', lede:'Three identical servers. Taking turns is already fair, so adaptive should make the same choices. This is the sanity check.', setup:['3 servers, 8 workers each','h1–h3 send requests, 4 threads each'], should:'Match round-robin, with no extra overhead.', key:'p95_ms', bars:['throughput','p95_ms','mean_ms']},
+  e2:{sc:'E2', name:'Unequal servers', title:'A weak server gets routed around', lede:'srv3 is a smaller machine: 2 workers instead of 8, and 2× slower. Round-robin still sends it one request in three.', setup:['srv3: 2 workers, 2× slower','srv1 and srv2: 8 workers'], should:'Send srv3 far fewer requests; higher throughput.', key:'throughput', bars:['throughput','p95_ms','share.srv3'], weak:true},
+  e3:{sc:'E3', name:'Hot server', title:'An overloaded server gets drained', lede:'At one third of the run, h4 floods srv1 directly, bypassing the balancer. Only srv1’s own load reports reveal it.', setup:['h4 sends 12 threads of 500 ms requests to srv1','starts at one third of the run'], should:'Drain srv1 and move new requests away.', key:'p95_after_ms', bars:['throughput','p95_after_ms','share.srv1'], ev:'hot'},
+  e4:{sc:'E4', name:'Server failure', title:'A dead server stops getting traffic', lede:'At one third of the run, the srv2 process is killed. Round-robin keeps sending it one request in three.', setup:['srv2 killed at one third of the run','no restart'], should:'Mark srv2 down within 3 s and stop using it.', key:'error_pct', bars:['error_pct','throughput','error_window_s'], ev:'kill'},
+  e5:{sc:'E5', name:'Link congestion', title:'A busy link sends traffic the other way', lede:'At one third of the run, iperf sends 9 Mbit/s of UDP across link A, which srv1 and srv2 share.', setup:['iperf 9 Mbit/s on link A (10 Mbit/s cap)','srv3 sits alone on link B'], should:'Prefer srv3 on link B.', key:'share.srv3', bars:['share.srv3','p95_after_ms','throughput'], ev:'congest'},
+  e6:{sc:'E6', name:'Scale-up', title:'More clients, same behaviour', lede:'Equal servers while clients grow from 1 to 8 threads per host (3 to 24 in total). Runs 8 experiments.', setup:['threads per client host: 1, 2, 4, 8','equal servers'], should:'Scale exactly like round-robin.', key:null, ramp:true}
+};
+
+let LIVE=false, MACHINE=null, RUNS=REF, JOB=null, current='overview';
+const $=(s,el=document)=>el.querySelector(s);
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function val(s,k){ if(!s) return null; if(k.startsWith('share.')) return s.share? Math.round(s.share[k.slice(6)]*1000)/10 : null; return s[k] }
+function fmt(v,u){ if(v==null) return '–'; const n=Math.abs(v)>=100?Math.round(v):Math.round(v*10)/10; return u==='%'?n+'%':u==='ms'?n+' ms':u==='s'?n+' s':n+' '+u }
+function pick(sc,mode,threads=4){ const src=LIVE?RUNS:REF; const r=src.filter(x=>x.scenario===sc&&x.mode===mode&&x.threads===threads); return r.sort((a,b)=>(b.finished||0)-(a.finished||0))[0]||null }
+function liveHas(sc){ return LIVE && RUNS.some(r=>r.scenario===sc) }
+function dataFor(sc,mode,threads=4){ if(LIVE){const r=RUNS.filter(x=>x.scenario===sc&&x.mode===mode&&x.threads===threads).sort((a,b)=>b.finished-a.finished)[0]; if(r) return {run:r,live:true}} const r=REF.find(x=>x.scenario===sc&&x.mode===mode&&x.threads===threads); return r?{run:r,live:false}:null }
+
+/* ---------- spring (critically damped, starts from the current value) ---------- */
+const reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const pill={x:0,w:0,vx:0,vw:0,tx:0,tw:0,raf:0};
+function movePill(){
+  const b=$(`#tabs button[data-id="${current}"]`); if(!b) return;
+  pill.tx=b.offsetLeft; pill.tw=b.offsetWidth;
+  if(reduce||!pill.w){pill.x=pill.tx;pill.w=pill.tw;paintPill();return}
+  if(!pill.raf){let last=performance.now();const w0=2*Math.PI/0.35;
+    const tick=t=>{const dt=Math.min(.032,(t-last)/1000);last=t;
+      for(const [p,v,tg] of [['x','vx','tx'],['w','vw','tw']]){const a=-w0*w0*(pill[p]-pill[tg])-2*w0*pill[v];pill[v]+=a*dt;pill[p]+=pill[v]*dt}
+      paintPill();
+      if(Math.abs(pill.x-pill.tx)<.3&&Math.abs(pill.vx)<.5&&Math.abs(pill.w-pill.tw)<.3){pill.x=pill.tx;pill.w=pill.tw;paintPill();pill.raf=0;return}
+      pill.raf=requestAnimationFrame(tick)};
+    pill.raf=requestAnimationFrame(tick)}
+}
+function paintPill(){const p=$('#pill');p.style.transform=`translateX(${pill.x}px)`;p.style.width=pill.w+'px'}
+
+/* ---------- pages ---------- */
+function topologySVG(){
+  const box=(x,y,w,h,label,sub,fill,ink)=>`<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="12" fill="${fill}"/><text x="${x+w/2}" y="${y+h/2+(sub?-4:5)}" text-anchor="middle" fill="${ink}" style="font-size:15px">${label}</text>${sub?`<text x="${x+w/2}" y="${y+h/2+16}" text-anchor="middle" fill="${ink}" style="font:400 12px var(--sans);opacity:.8">${sub}</text>`:''}`;
+  const ln=(x1,y1,x2,y2,dash)=>`<path d="M${x1} ${y1} L${x2} ${y2}" stroke="var(--muted)" stroke-width="2" fill="none" ${dash?'stroke-dasharray="6 5"':''}/>`;
+  return `<svg class="topo" viewBox="0 0 900 360" role="img" aria-label="Topology: clients h1 to h4 on switch s1; s1 connects to s2 over link A and to s3 over link B; srv1 and srv2 sit behind s2, srv3 behind s3; the Ryu controller programs all three switches.">
+    ${ln(150,180,260,180)}${ln(360,160,470,90)}${ln(360,200,470,270)}${ln(570,80,690,45)}${ln(570,100,690,135)}${ln(570,270,690,270)}${ln(310,215,310,300,true)}
+    <text x="400" y="112" fill="var(--accent)" style="font-size:13px">Link A</text><text x="400" y="258" fill="var(--accent)" style="font-size:13px">Link B</text>
+    ${box(20,140,130,80,'Clients','h1–h4','var(--fill)','var(--ink)')}
+    ${box(260,150,100,60,'s1','edge','var(--ink)','var(--bg)')}${box(470,55,100,60,'s2','','var(--ink)','var(--bg)')}${box(470,240,100,60,'s3','','var(--ink)','var(--bg)')}
+    ${box(690,15,190,60,'srv1','10.0.0.11','var(--fill)','var(--ink)')}${box(690,105,190,60,'srv2','10.0.0.12','var(--fill)','var(--ink)')}${box(690,240,190,60,'srv3','10.0.0.13','var(--fill)','var(--ink)')}
+    ${box(220,300,180,52,'Ryu controller','','var(--accent)','#fff')}
+  </svg>`;
+}
+function animCard(id,title){
+  return `<div class="card anim" data-anim="${id}">
+    <div class="row" style="justify-content:space-between"><h3>${title}</h3><div class="row"><button class="btn ghost" data-a="play" type="button">Play</button><button class="btn ghost" data-a="replay" type="button">Replay</button></div></div>
+    <div class="row"><div class="tl"><div class="f"></div><div class="m" hidden></div></div><span class="clock">0 s</span></div>
+    <div class="panels">
+      <div class="col" style="display:flex;flex-direction:column;gap:8px"><div class="ph"><b>Static round-robin</b><span class="muted small">takes turns</span></div><canvas aria-label="Animation of the round-robin balancer"></canvas><div class="stats"><span>Done <b data-k="done">0</b></span><span>Failed <b data-k="failed">0</b></span><span>srv1/2/3 <b data-k="share">–</b></span></div></div>
+      <div class="col" style="display:flex;flex-direction:column;gap:8px"><div class="ph"><b>Adaptive (Ryu)</b><span class="muted small">reads load and links</span></div><canvas aria-label="Animation of the adaptive balancer"></canvas><div class="stats"><span>Done <b data-k="done">0</b></span><span>Failed <b data-k="failed">0</b></span><span>srv1/2/3 <b data-k="share">–</b></span></div></div>
+    </div>
+    <p class="small muted">Simplified simulation of the controller’s rules, slowed down to follow. Measured numbers are below.</p>
+  </div>`;
+}
+function buildPages(){
+  const m=$('#main'); let h='';
+  h+=`<section class="page" id="p-overview">
+    <div class="head hero"><p class="eyebrow">Team 9 · Project 20 · SDN + socket programming</p><h1>Adaptive Load Balancer</h1>
+    <p class="lede">Three TCP servers behind one address, 10.0.0.100. A Ryu controller sends every new connection to the least-loaded healthy server, using load reports from the servers and traffic on each link.</p></div>
+    <span class="source" id="ovSource"></span>
+    <div class="card"><div class="tiles" id="ovTiles"></div></div>
+    <div class="grid2"><div class="card"><h3>The network</h3>${topologySVG()}<p class="small muted">Links A and B are capped at 10 Mbit/s. srv1 and srv2 share link A, so server load and link load are different signals.</p></div>
+    <div class="card"><h3>Six experiments</h3><div class="tbl"><table><tr><th>#</th><th>Scenario</th><th>What changes</th></tr>
+      ${Object.entries(EXP).map(([id,e])=>`<tr><td><a href="#${id}" data-go="${id}" style="color:var(--accent);text-decoration:none;font-weight:600">${e.sc}</a></td><td>${e.name}</td><td class="muted">${e.setup[0]}</td></tr>`).join('')}
+    </table></div><p class="small muted">Open a tab to replay, run and see the numbers for each one.</p></div></div>
+    <p class="small muted">Leshawn Arron Lewis · Kishor Kumar M · Dhule Shashwati Vijay · Section E</p>
+  </section>`;
+  h+=`<section class="page" id="p-how" hidden>
+    <div class="head"><p class="eyebrow">How it works</p><h2>One decision per new connection</h2><p class="lede">Only the first packet of a connection reaches the controller. After that, the switch rewrites and forwards on its own.</p></div>
+    <div class="steps">${[['Client sends a SYN to 10.0.0.100'],['s1 has no rule, so it asks Ryu'],['Ryu scores each server, lowest wins'],['Ryu installs two rewrite rules on s1'],['The rest of the connection stays in the switch']].map((s,i)=>`<div class="card step"><span class="n">${i+1}</span><p>${s[0]}</p></div>`).join('')}</div>
+    <div class="grid2"><div class="card"><h3>The score</h3><p class="formula">0.5 × load + 0.2 × CPU + 0.3 × link use</p><p class="muted">load = estimated connections ÷ capacity. Every 0.25 s each server sends a UDP report to 10.0.0.254; a switch rule hands it to Ryu. Link use comes from switch port counters every second.</p></div>
+    <div class="card"><h3>Server states</h3><div class="tbl"><table><tr><th>State</th><th>When</th><th>Effect</th></tr><tr><td>Healthy</td><td class="muted">load below 90%</td><td class="muted">can win new connections</td></tr><tr><td>Draining</td><td class="muted">load ≥ 90% until below 70%</td><td class="muted">no new connections</td></tr><tr><td>Down</td><td class="muted">no report for 3 s</td><td class="muted">its rules are deleted</td></tr></table></div></div></div>
+    ${animCard('intro','Watch it run')}
+  </section>`;
+  for(const [id,e] of Object.entries(EXP)){
+    const est=e.ramp?'About 6 min':'About 1–2 min';
+    h+=`<section class="page" id="p-${id}" hidden>
+      <div class="head"><p class="eyebrow">Experiment ${e.sc} · ${e.name}</p><h2>${e.title}</h2><p class="lede">${e.lede}</p></div>
+      <div class="grid2">
+        <div class="card"><h3>Setup</h3><ul class="plain">${e.setup.map(s=>`<li>${s}</li>`).join('')}</ul><p><b>Adaptive should:</b> <span class="muted">${e.should}</span></p></div>
+        <div class="card runcard" data-sc="${e.sc}"><h3>Run on this VM</h3>
+          <p class="small muted">Runs static, then adaptive${e.ramp?', at 4 client sizes':''}, in Mininet with Ryu. ${est}.</p>
+          <div class="chips" role="group" aria-label="Duration per run">${[20,30,60].map(d=>`<button class="chip" type="button" data-d="${d}" aria-pressed="${d===30}">${d} s per run</button>`).join('')}</div>
+          <button class="btn" type="button" data-run="${e.sc}">Run ${e.sc}</button>
+          <div class="bar" hidden><i></i></div><p class="small muted status"></p><pre class="log" hidden></pre></div>
+      </div>
+      ${animCard(id,'Replay')}
+      <div class="results" id="r-${id}" style="display:flex;flex-direction:column;gap:20px"></div>
+    </section>`;
+  }
+  h+=`<section class="page" id="p-tests" hidden>
+    <div class="head"><p class="eyebrow">Automated tests</p><h2>Eight checks, run on this machine</h2><p class="lede">Seven test the decision logic with a fake clock. One starts the real TCP server and client.</p></div>
+    <div class="card"><div class="tbl"><table><tr><th>Test</th><th>What it checks</th></tr>
+      ${[['test_static_is_round_robin_even_when_down','Round-robin keeps taking turns, even with a dead server'],['test_adaptive_prefers_least_loaded','The server with the fewest connections wins'],['test_pending_spreads_flows_between_reports','New flows spread out between two load reports'],['test_drain_and_resume_hysteresis','Draining at 90% of capacity, back below 70%'],['test_dead_server_skipped','A server silent for 3 s is marked down'],['test_fast_server_finishes_its_pending_flows','A fast server is not mistaken for a busy one'],['test_congested_link_shifts_to_other_path','A busy link makes the other path win'],['test_server_and_client','Real TCP server and client; bad input rejected']].map(t=>`<tr><td style="font:13px var(--mono)">${t[0]}</td><td class="muted">${t[1]}</td></tr>`).join('')}
+    </table></div>
+    <button class="btn" type="button" id="runTests">Run tests</button><p class="small muted" id="testStatus"></p><pre class="log" id="testOut" hidden></pre></div>
+  </section>`;
+  m.innerHTML=h;
+  const tabs=$('#tabs');
+  PAGES.forEach(p=>{const b=document.createElement('button');b.type='button';b.textContent=p.tab;b.dataset.id=p.id;b.addEventListener('pointerdown',()=>show(p.id));b.addEventListener('keydown',ev=>{if(ev.key==='Enter'||ev.key===' ')show(p.id)});tabs.appendChild(b)});
+  m.addEventListener('click',ev=>{const g=ev.target.closest('[data-go]');if(g){ev.preventDefault();show(g.dataset.go)}});
+  document.querySelectorAll('.runcard .chip').forEach(c=>c.addEventListener('click',()=>{c.parentElement.querySelectorAll('.chip').forEach(x=>x.setAttribute('aria-pressed',x===c));}));
+  document.querySelectorAll('[data-run]').forEach(b=>b.addEventListener('click',()=>startRun(b.dataset.run,+b.closest('.runcard').querySelector('.chip[aria-pressed="true"]').dataset.d)));
+  $('#runTests').addEventListener('click',runTests);
+}
+function show(id){
+  if(!PAGES.some(p=>p.id===id)) id='overview';
+  current=id;
+  document.querySelectorAll('.page').forEach(s=>s.hidden=s.id!=='p-'+id);
+  document.querySelectorAll('#tabs button').forEach(b=>b.setAttribute('aria-current',b.dataset.id===id?'page':'false'));
+  movePill();
+  const b=$(`#tabs button[data-id="${id}"]`); if(b) b.scrollIntoView({block:'nearest',inline:'nearest'});
+  history.replaceState(null,'','#'+id);
+  Anim.activate(id);
+  window.scrollTo({top:0});
+}
+
+/* ---------- charts ---------- */
+function barChart(key,s,a){
+  const M=METRIC[key], vs=val(s,key), va=val(a,key), max=Math.max(vs||0,va||0)||1, W=360, bw=200;
+  const row=(y,label,v,color)=>`<text x="0" y="${y+15}">${label}</text><rect x="80" y="${y}" width="${Math.max(2,bw*(v||0)/max)}" height="22" rx="4" fill="${color}"><title>${label}: ${fmt(v,M.unit)}</title></rect><text class="val" x="${86+bw*(v||0)/max}" y="${y+15}">${fmt(v,M.unit)}</text>`;
+  const note=M.better?(M.better==='lower'?'lower is better':'higher is better'):'';
+  return `<div class="card chart"><h3 style="font-size:17px">${M.label}</h3><p class="small muted">${note}</p><svg viewBox="0 0 ${W} 70" role="img" aria-label="${M.label}: static ${fmt(vs,M.unit)}, adaptive ${fmt(va,M.unit)}">${row(4,'Static',vs,'var(--static)')}${row(40,'Adaptive',va,'var(--accent)')}</svg></div>`;
+}
+function timeline(run,title){
+  const tl=run.timeline, n=Math.max(1,run.duration), W=600, H=200, L=34, B=24, T=8;
+  let max=1; for(let i=0;i<n;i++) for(const k of [...SRV,'err']) max=Math.max(max,tl[k][i]||0);
+  max=Math.ceil(max/10)*10;
+  const x=i=>L+(W-L-8)*i/(n-1||1), y=v=>T+(H-T-B)*(1-v/max);
+  const line=k=>`<path d="${[...Array(n).keys()].map(i=>(i?'L':'M')+x(i).toFixed(1)+' '+y(tl[k][i]||0).toFixed(1)).join(' ')}" fill="none" stroke="var(--${k.replace('srv','s')})" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  const bw=Math.max(2,(W-L-8)/n*.6);
+  const errs=[...Array(n).keys()].filter(i=>tl.err[i]).map(i=>`<rect x="${x(i)-bw/2}" y="${y(tl.err[i])}" width="${bw}" height="${H-B-y(tl.err[i])}" rx="2" fill="var(--err)" opacity=".75"/>`).join('');
+  const ticks=[0,max/2,max].map(v=>`<line class="grid" x1="${L}" x2="${W-8}" y1="${y(v)}" y2="${y(v)}"/><text x="${L-6}" y="${y(v)+4}" text-anchor="end">${v}</text>`).join('');
+  const xt=[...Array(n).keys()].filter(i=>i%5===0).map(i=>`<text x="${x(i)}" y="${H-6}" text-anchor="middle">${i}s</text>`).join('');
+  const evx=run.event_offset!=null?x(run.event_offset):null;
+  const ev=evx!=null?`<line x1="${evx}" x2="${evx}" y1="${T}" y2="${H-B}" stroke="var(--warn)" stroke-width="1.5" stroke-dasharray="4 4"/><text x="${evx+4}" y="${T+10}" style="fill:var(--warn)">event</text>`:'';
+  const id='tl'+Math.random().toString(36).slice(2,8);
+  setTimeout(()=>hover(id,run,x,n),0);
+  return `<div class="card chart"><h3 style="font-size:17px">${title}</h3>
+    <div class="legend">${SRV.map(k=>`<span><i style="background:var(--${k.replace('srv','s')})"></i>${k}</span>`).join('')}<span><i style="background:var(--err)"></i>failed</span></div>
+    <div style="position:relative" id="${id}"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(title)}: requests per second per server over time">${ticks}${xt}${errs}${SRV.map(line).join('')}${ev}<line class="xh" x1="0" x2="0" y1="${T}" y2="${H-B}" stroke="var(--muted)" stroke-width="1" opacity="0"/></svg><div class="tip" hidden></div></div>
+    <p class="small muted">Successful requests per second, by the server that answered.</p></div>`;
+}
+function hover(id,run,x,n){
+  const box=document.getElementById(id); if(!box) return; const svg=box.querySelector('svg'),tip=box.querySelector('.tip'),xh=svg.querySelector('.xh');
+  svg.addEventListener('pointermove',e=>{const r=svg.getBoundingClientRect(),vx=(e.clientX-r.left)/r.width*600;
+    let i=Math.round((vx-34)/(600-42)*(n-1)); i=Math.max(0,Math.min(n-1,i));
+    xh.setAttribute('x1',x(i));xh.setAttribute('x2',x(i));xh.setAttribute('opacity','.6');
+    tip.hidden=false; tip.innerHTML=`<b>${i} s</b><br>${SRV.map(k=>`${k}: ${run.timeline[k][i]||0}`).join('<br>')}<br>failed: ${run.timeline.err[i]||0}`;
+    const px=(x(i)/600)*r.width; tip.style.left=Math.min(r.width-120,px+10)+'px'; tip.style.top='8px'});
+  svg.addEventListener('pointerleave',()=>{tip.hidden=true;xh.setAttribute('opacity','0')});
+}
+function table(rows,cols){
+  return `<div class="card"><h3 style="font-size:17px">All numbers</h3><div class="tbl"><table><tr><th>Metric</th>${cols.map(c=>`<th class="num">${c.label}</th>`).join('')}</tr>
+    ${rows.map(k=>`<tr><td>${METRIC[k]?METRIC[k].label:k}</td>${cols.map(c=>`<td class="num">${fmt(val(c.s,k),(METRIC[k]||{}).unit||'')}</td>`).join('')}</tr>`).join('')}
+    <tr><td>Requests sent</td>${cols.map(c=>`<td class="num">${c.s?c.s.requests:'–'}</td>`).join('')}</tr></table></div></div>`;
+}
+function srcPill(live,run){ return live?`<span class="source live">Measured on this VM${MACHINE?' ('+esc(MACHINE.host)+')':''} · ${new Date(run.finished*1000).toLocaleString()}</span>`:`<span class="source">Reference run, not this VM. Press Run to measure on your machine.</span>` }
+function change(k,vs,va){ if(vs==null||va==null||!vs) return '–'; const M=METRIC[k]||{}; if(M.unit==='%'&&!M.better) return (va-vs>0?'+':'')+Math.round(va-vs)+' pts';
+  const r=va/vs; if(M.better==='higher') return r>=1.05?r.toFixed(1)+'× higher':'about the same'; if(r<=.95) return (vs/va>=2?(vs/va).toFixed(1)+'× lower':Math.round((1-r)*100)+'% lower'); return r>=1.05?Math.round((r-1)*100)+'% higher':'about the same' }
+function renderResults(id){
+  const e=EXP[id], box=$('#r-'+id); if(!box) return;
+  if(e.ramp){
+    const th=[1,2,4,8], S=th.map(t=>dataFor('E6','static',t)), A=th.map(t=>dataFor('E6','adaptive',t));
+    if(!S.some(Boolean)){box.innerHTML='<p class="muted">No results yet.</p>';return}
+    const live=S.concat(A).some(d=>d&&d.live), last=(S[3]||S[0]).run;
+    const W=600,H=220,L=44,B=28,T=10,max=Math.ceil(Math.max(...S.concat(A).map(d=>d?d.run.summary.p95_ms:0))/50)*50||50;
+    const x=i=>L+(W-L-20)*i/3, y=v=>T+(H-T-B)*(1-v/max);
+    const path=(D,c)=>`<path d="${D.map((d,i)=>d?(i?'L':'M')+x(i)+' '+y(d.run.summary.p95_ms):'').join(' ')}" stroke="${c}" stroke-width="2" fill="none"/>`+D.map((d,i)=>d?`<circle cx="${x(i)}" cy="${y(d.run.summary.p95_ms)}" r="5" fill="${c}" stroke="var(--surface)" stroke-width="2"><title>${th[i]*3} threads: ${fmt(d.run.summary.p95_ms,'ms')}</title></circle>`:'').join('');
+    box.innerHTML=srcPill(live,last)+`<div class="card chart"><h3 style="font-size:17px">p95 latency as clients grow</h3><div class="legend"><span><i style="background:var(--static)"></i>Static</span><span><i style="background:var(--accent)"></i>Adaptive</span></div>
+      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="p95 latency against number of client threads for static and adaptive">${[0,max/2,max].map(v=>`<line class="grid" x1="${L}" x2="${W-20}" y1="${y(v)}" y2="${y(v)}"/><text x="${L-6}" y="${y(v)+4}" text-anchor="end">${v}</text>`).join('')}${th.map((t,i)=>`<text x="${x(i)}" y="${H-8}" text-anchor="middle">${t*3} threads</text>`).join('')}${path(S,'var(--static)')}${path(A,'var(--accent)')}</svg></div>
+      <div class="card"><h3 style="font-size:17px">All numbers</h3><div class="tbl"><table><tr><th>Threads</th><th class="num">Static p95</th><th class="num">Adaptive p95</th><th class="num">Static req/s</th><th class="num">Adaptive req/s</th></tr>
+      ${th.map((t,i)=>`<tr><td>${t*3}</td><td class="num">${S[i]?fmt(S[i].run.summary.p95_ms,'ms'):'–'}</td><td class="num">${A[i]?fmt(A[i].run.summary.p95_ms,'ms'):'–'}</td><td class="num">${S[i]?S[i].run.summary.throughput:'–'}</td><td class="num">${A[i]?A[i].run.summary.throughput:'–'}</td></tr>`).join('')}</table></div></div>`;
+    return;
+  }
+  const ds=dataFor(e.sc,'static'), da=dataFor(e.sc,'adaptive');
+  if(!ds||!da){box.innerHTML=`<div class="card"><p class="muted">No results for ${e.sc} yet. Press Run above.</p></div>`;return}
+  const s=ds.run.summary, a=da.run.summary, live=ds.live&&da.live, K=METRIC[e.key];
+  box.innerHTML=srcPill(live,da.run)+
+    `<div class="card"><div class="tiles"><div class="tile"><span class="l">Static · ${K.label}</span><span class="v">${fmt(val(s,e.key),K.unit)}</span></div><div class="tile accent"><span class="l">Adaptive · ${K.label}</span><span class="v">${fmt(val(a,e.key),K.unit)}</span></div><div class="tile"><span class="l">Change</span><span class="v">${change(e.key,val(s,e.key),val(a,e.key))}</span></div></div></div>
+    <div class="grid3">${e.bars.map(k=>barChart(k,s,a)).join('')}</div>
+    <div class="grid2">${timeline(ds.run,'Static round-robin over time')}${timeline(da.run,'Adaptive over time')}</div>
+    ${table(['throughput','mean_ms','p95_ms','p95_after_ms','error_pct','share.srv1','share.srv3'].concat(e.ev==='kill'?['error_window_s']:[]),[{label:'Static',s},{label:'Adaptive',s:a}])}`;
+}
+function renderOverview(){
+  const g=(sc,m,k)=>{const d=dataFor(sc,m);return d?val(d.run.summary,k):null};
+  const t=[['E2 throughput with a weak server',change('throughput',g('E2','static','throughput'),g('E2','adaptive','throughput'))],['E3 tail latency with a hot server',change('p95_after_ms',g('E3','static','p95_after_ms'),g('E3','adaptive','p95_after_ms'))],['E4 failed requests when a server dies',fmt(g('E4','static','error_pct'),'%')+' → '+fmt(g('E4','adaptive','error_pct'),'%')]];
+  $('#ovTiles').innerHTML=t.map((x,i)=>`<div class="tile ${i===0?'accent':''}"><span class="v">${x[1]}</span><span class="l">${x[0]}</span></div>`).join('');
+  const any=LIVE&&RUNS.length; const s=$('#ovSource'); s.className='source'+(any?' live':''); s.textContent=any?`${RUNS.length} runs measured on this VM (${MACHINE.host}); tabs without a VM run show the reference run`:(LIVE?'Connected to the VM. No runs yet: open a tab and press Run. Showing the reference run.':'Offline: showing the reference run. Start the dashboard on the VM to run experiments.');
+}
+function renderAll(){ renderOverview(); Object.keys(EXP).forEach(renderResults) }
+
+/* ---------- talking to the VM ---------- */
+async function api(path,opt){ const r=await fetch(path,Object.assign({cache:'no-store'},opt)); const j=await r.json().catch(()=>({})); if(!r.ok) throw new Error(j.error||('HTTP '+r.status)); return j }
+async function loadResults(){
+  try{ const ctl=new AbortController(); setTimeout(()=>ctl.abort(),3000); const d=await api('/api/results',{signal:ctl.signal}); LIVE=true; MACHINE=d.machine; RUNS=d.runs }catch{ LIVE=false; RUNS=REF }
+  const c=$('#conn'); c.classList.toggle('live',LIVE); c.lastElementChild.textContent=LIVE?('VM: '+MACHINE.host):'Offline';
+  document.querySelectorAll('[data-run],#runTests').forEach(b=>b.disabled=!LIVE);
+  if(!LIVE) document.querySelectorAll('.runcard .status').forEach(p=>p.textContent='Open this page on the VM to run: sudo -E python3 dashboard/server.py, then http://localhost:8000');
+  renderAll();
+}
+async function startRun(sc,dur){
+  const card=$(`.runcard[data-sc="${sc}"]`), st=card.querySelector('.status');
+  try{ await api('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({scenario:sc,duration:dur})}); st.textContent='Starting…'; poll() }
+  catch(e){ st.textContent=e.message }
+}
+let polling=false, wasRunning=false;
+async function poll(){
+  if(polling||!LIVE) return; polling=true;
+  try{ while(true){ JOB=await api('/api/status'); paintJob(); if(!JOB.running){ if(wasRunning){wasRunning=false; await loadResults(); paintJob(true)} break } wasRunning=true; await new Promise(r=>setTimeout(r,1500)) } }
+  catch{} polling=false;
+}
+function paintJob(done){
+  document.querySelectorAll('.runcard').forEach(card=>{
+    const sc=card.dataset.sc, btn=card.querySelector('[data-run]'), bar=card.querySelector('.bar'), st=card.querySelector('.status'), log=card.querySelector('.log');
+    const mine=JOB&&JOB.scenario===sc;
+    btn.disabled=!LIVE||(JOB&&JOB.running);
+    if(JOB&&JOB.running&&mine){ const per=(+card.querySelector('.chip[aria-pressed="true"]').dataset.d)+14; const el=JOB.now-JOB.started; bar.hidden=false; bar.firstElementChild.style.width=Math.min(97,el/(per*JOB.steps)*100)+'%';
+      st.textContent=`Run ${JOB.step} of ${JOB.steps}: ${JOB.label} · ${Math.round(el)} s`; log.hidden=false; log.textContent=JOB.log.slice(-8).join('\n'); log.scrollTop=log.scrollHeight }
+    else if(JOB&&JOB.running){ st.textContent=`Waiting: ${JOB.label} is running in another tab.` }
+    else if(mine&&(done||JOB.finished)){ bar.hidden=false; bar.firstElementChild.style.width='100%'; st.textContent=JOB.error?('Failed: '+JOB.error):`Finished ${new Date(JOB.finished*1000).toLocaleTimeString()}. Results below are from this VM.`; log.hidden=!JOB.error; log.textContent=JOB.log.slice(-12).join('\n') }
+    else if(LIVE){ st.textContent=liveHas(sc)?'Results below were measured on this VM.':'Not run on this VM yet.' }
+  });
+}
+async function runTests(){
+  const s=$('#testStatus'), o=$('#testOut'), b=$('#runTests'); b.disabled=true; s.textContent='Running…';
+  try{ const r=await api('/api/tests',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}); s.innerHTML=r.ok?'<b style="color:var(--good)">All tests passed</b>':'<b style="color:var(--err)">Some tests failed</b>'; o.hidden=false; o.textContent=r.output }
+  catch(e){ s.textContent=e.message } b.disabled=!LIVE;
+}
+
+/* ---------- animation (slowed down) ---------- */
+const Anim=(()=>{
+  const DUR=30, EVT=11, SEG=.42, WORK=1.0, DETECT=2;
+  const P={h1:[.07,.2],h2:[.07,.4],h3:[.07,.6],h4:[.07,.8],s1:[.31,.5],s2:[.55,.27],s3:[.55,.73],srv1:[.85,.14],srv2:[.85,.4],srv3:[.85,.73]};
+  const SC={intro:{},e1:{},e2:{weak:true},e3:{ev:'hot'},e4:{ev:'kill'},e5:{ev:'congest'},e6:{ramp:true}};
+  const cards={}; let activeId=null, last=0, C={};
+  function rng(seed){let s=seed>>>0;return()=>{s=(s*1664525+1013904223)>>>0;return s/4294967296}}
+  function make(mode,sc,seed){const S={mode,sc,r:rng(seed),t:0,done:0,failed:0,share:[0,0,0],rr:0,reqs:[],events:[],users:[],iperf:[],lastSnap:0};
+    S.servers=SRV.map((n,i)=>({n,i,sw:i<2?'s2':'s3',link:i<2?'A':'B',cap:4,slow:1,active:0,busy:0,queue:[],dead:false,knownDead:false,drain:false,snap:0,transit:0,lastHeard:0}));
+    if(sc.weak){S.servers[2].cap=1;S.servers[2].slow=2.2}
+    for(let k=0;k<(sc.ramp?3:12);k++)S.users.push({c:['h1','h2','h3'][k%3],next:S.r()*2,busy:false});return S}
+  const cong=S=>S.sc.ev==='congest'&&S.t>=EVT;
+  const segT=(S,a,b)=>((a==='s1'&&b==='s2')||(a==='s2'&&b==='s1'))&&cong(S)?SEG*3.5:SEG;
+  function pickSrv(S){if(S.mode==='static')return S.servers[S.rr++%3];
+    let pool=S.servers.filter(s=>!s.knownDead&&!s.drain); if(!pool.length)pool=S.servers.filter(s=>!s.knownDead); if(!pool.length)pool=S.servers;
+    let best=pool[0],bs=1e9; for(const s of pool){const v=.7*(s.snap+s.transit)/s.cap+.3*(cong(S)&&s.link==='A'?.95:0)+S.r()*1e-3; if(v<bs){bs=v;best=s}} return best}
+  function start(S,q){const s=q.s;s.busy++;q.phase='work';q.until=S.t+(q.direct?WORK*3:WORK*s.slow*(.8+S.r()*.4))}
+  function step(S,dt){S.t+=dt;const t=S.t,sc=S.sc;
+    if(sc.ev==='kill'&&t>=EVT&&!S.servers[1].dead){const s=S.servers[1];s.dead=true;s.active=s.busy=0;for(const q of S.reqs)if(q.s===s&&(q.phase==='work'||q.phase==='wait')){q.phase='fail';q.until=t+1}s.queue=[]}
+    if(sc.ramp){const want=3+Math.floor(21*Math.min(1,t/(DUR-3)));while(S.users.length<want)S.users.push({c:['h1','h2','h3'][S.users.length%3],next:t,busy:false})}
+    if(sc.ev==='hot'&&t>=EVT&&S.reqs.filter(q=>q.direct).length<6)S.reqs.push({direct:true,s:S.servers[0],path:['h4','s1','s2','srv1'],seg:0,prog:0,phase:'out'});
+    if(t-S.lastSnap>=.25){S.lastSnap=t;for(const s of S.servers)if(!s.dead){s.snap=s.active;s.lastHeard=t;const L=s.active/s.cap;s.drain=s.drain?L>=.7:L>=.9}}
+    for(const s of S.servers)if(s.dead&&!s.knownDead&&t-s.lastHeard>DETECT){s.knownDead=true;S.events.push(s.n+' marked down, no longer used')}
+    for(const u of S.users)if(!u.busy&&t>=u.next){u.busy=true;const s=pickSrv(S);s.transit++;S.reqs.push({u,s,path:[u.c,'s1',s.sw,s.n],seg:0,prog:0,phase:'out'})}
+    const keep=[];for(const q of S.reqs){
+      if(q.phase==='out'||q.phase==='back'){q.prog+=dt/segT(S,q.path[q.seg],q.path[q.seg+1]);
+        if(q.prog>=1){q.seg++;q.prog=0;if(q.seg>=q.path.length-1){
+          if(q.phase==='out'){const s=q.s;if(!q.direct)s.transit=Math.max(0,s.transit-1);if(s.dead){q.phase='fail';q.until=t+1}else{s.active++;if(s.busy<s.cap)start(S,q);else{q.phase='wait';s.queue.push(q)}}}
+          else{if(!q.direct){S.done++;S.share[q.s.i]++;q.u.busy=false;q.u.next=t+.2}continue}}}}
+      else if(q.phase==='work'&&t>=q.until){const s=q.s;s.busy--;s.active--;const nx=s.queue.shift();if(nx)start(S,nx);q.phase='back';q.path=q.path.slice().reverse();q.seg=0;q.prog=0}
+      else if(q.phase==='fail'&&t>=q.until){if(!q.direct){S.failed++;q.u.busy=false;q.u.next=t+.5}continue}
+      keep.push(q)}
+    S.reqs=keep;
+    if(cong(S)){if(S.r()<.35)S.iperf.push({p:0});for(const x of S.iperf)x.p+=dt/1.2;S.iperf=S.iperf.filter(x=>x.p<1)}}
+  function colors(){const cs=getComputedStyle(document.documentElement);for(const k of ['surface','fill','line','ink','muted','static','accent','warn','err'])C[k]=cs.getPropertyValue('--'+k).trim()}
+  const pt=(n,w,h)=>[P[n][0]*w,P[n][1]*h];
+  function rr(g,x,y,w,h,r){g.beginPath();g.roundRect?g.roundRect(x,y,w,h,r):g.rect(x,y,w,h)}
+  const F=getComputedStyle(document.body).fontFamily;
+  function draw(cv,S){const g=cv.getContext('2d'),w=cv.width,h=cv.height,u=w/640;
+    g.fillStyle=C.fill;g.fillRect(0,0,w,h);
+    for(const [a,b] of [['h1','s1'],['h2','s1'],['h3','s1'],['h4','s1'],['s1','s2'],['s1','s3'],['s2','srv1'],['s2','srv2'],['s3','srv3']]){const A=pt(a,w,h),B=pt(b,w,h),hot=a==='s1'&&b==='s2'&&cong(S);g.beginPath();g.moveTo(...A);g.lineTo(...B);g.strokeStyle=hot?C.warn:C.line;g.lineWidth=(hot?8:3)*u;g.lineCap='round';g.stroke()}
+    g.textAlign='center';g.textBaseline='middle';g.font=`600 ${15*u}px ${F}`;
+    const ma=[(P.s1[0]+P.s2[0])/2*w,(P.s1[1]+P.s2[1])/2*h],mb=[(P.s1[0]+P.s3[0])/2*w,(P.s1[1]+P.s3[1])/2*h];
+    g.fillStyle=cong(S)?C.warn:C.muted;g.fillText(cong(S)?'Link A (busy)':'Link A',ma[0]-54*u,ma[1]-16*u);g.fillStyle=C.muted;g.fillText('Link B',mb[0]-54*u,mb[1]+16*u);
+    for(const x of S.iperf){const sg=x.p<.5?['h4','s1',x.p*2]:['s1','s2',(x.p-.5)*2],A=pt(sg[0],w,h),B=pt(sg[1],w,h);g.fillStyle=C.warn;g.fillRect(A[0]+(B[0]-A[0])*sg[2]-5*u,A[1]+(B[1]-A[1])*sg[2]-2.5*u,10*u,5*u)}
+    for(const c of ['h1','h2','h3','h4']){const [x,y]=pt(c,w,h);g.fillStyle=C.surface;g.beginPath();g.arc(x,y,20*u,0,7);g.fill();g.fillStyle=C.ink;g.font=`600 ${14*u}px ${F}`;g.fillText(c,x,y)}
+    for(const s of ['s1','s2','s3']){const [x,y]=pt(s,w,h);g.fillStyle=C.ink;rr(g,x-38*u,y-24*u,76*u,48*u,10*u);g.fill();g.fillStyle=C.surface;g.font=`600 ${17*u}px ${F}`;g.fillText(s,x,y)}
+    for(const s of S.servers){const [x,y]=pt(s.n,w,h),bw=116*u,bh=58*u;g.fillStyle=C.surface;rr(g,x-bw/2,y-bh/2,bw,bh,10*u);g.fill();if(s.dead){g.strokeStyle=C.err;g.lineWidth=2.5*u;g.stroke()}
+      g.textAlign='left';g.fillStyle=C.ink;g.font=`600 ${14*u}px ${F}`;g.fillText(s.n,x-bw/2+10*u,y-bh/2+14*u);
+      const sz=15*u,gp=5*u;for(let k=0;k<s.cap;k++){g.fillStyle=k<s.busy?(S.mode==='static'?C.static:C.accent):C.line;rr(g,x-bw/2+10*u+k*(sz+gp),y+2*u,sz,sz,4*u);g.fill()}
+      let tag='',tc=C.muted;if(s.dead){tag=S.mode==='adaptive'&&s.knownDead?'marked down':'down';tc=C.err}else if(s.drain&&S.mode==='adaptive'){tag='draining';tc=C.warn}else if(s.queue.length){tag='queue '+s.queue.length;tc=C.warn}
+      g.textAlign='center';g.fillStyle=tc;g.font=`600 ${13*u}px ${F}`;g.fillText(tag,x,y+bh/2+13*u);
+      if(s.dead){g.strokeStyle=C.err;g.lineWidth=3*u;g.beginPath();g.moveTo(x-bw/2+8*u,y+bh/2-8*u);g.lineTo(x+bw/2-8*u,y-bh/2+8*u);g.stroke()}}
+    const col=S.mode==='static'?C.static:C.accent;
+    for(const q of S.reqs){if(q.phase==='work'||q.phase==='wait')continue;let x,y;
+      if(q.phase==='fail'){[x,y]=pt(q.s.n,w,h);x-=86*u}else{const A=pt(q.path[q.seg],w,h),B=pt(q.path[q.seg+1],w,h),e=q.prog;x=A[0]+(B[0]-A[0])*e;y=A[1]+(B[1]-A[1])*e}
+      g.globalAlpha=q.phase==='back'?.5:1;g.fillStyle=q.phase==='fail'?C.err:q.direct?C.warn:col;g.beginPath();g.arc(x,y,(q.phase==='fail'?8:6)*u,0,7);g.fill();g.globalAlpha=1;
+      if(q.phase==='fail'){g.strokeStyle=C.surface;g.lineWidth=2*u;g.beginPath();g.moveTo(x-3.5*u,y-3.5*u);g.lineTo(x+3.5*u,y+3.5*u);g.moveTo(x+3.5*u,y-3.5*u);g.lineTo(x-3.5*u,y+3.5*u);g.stroke()}}
+    const ev=S.events[S.events.length-1];if(ev&&S.mode==='adaptive'){g.textAlign='left';g.fillStyle=C.accent;g.font=`600 ${15*u}px ${F}`;g.fillText('Ryu: '+ev,18*u,h-18*u)}}
+  function init(){colors();document.querySelectorAll('[data-anim]').forEach(el=>{const id=el.dataset.anim;const c={el,id,cv:[...el.querySelectorAll('canvas')],playing:!reduce,sims:null};cards[id]=c;
+      el.querySelector('[data-a="play"]').addEventListener('click',()=>{c.playing=!c.playing;label(c)});el.querySelector('[data-a="replay"]').addEventListener('click',()=>{reset(c);c.playing=true;label(c)});
+      const m=el.querySelector('.m');const sc=SC[id]||{};m.hidden=!sc.ev;m.style.left=(EVT/DUR*100)+'%';reset(c);label(c)});
+    addEventListener('resize',size);matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{colors();paintAll()});
+    new MutationObserver(()=>{colors();paintAll()}).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+    requestAnimationFrame(frame)}
+  function label(c){c.el.querySelector('[data-a="play"]').textContent=c.playing?'Pause':'Play'}
+  function reset(c){const sc=SC[c.id]||{};c.sims=[make('static',sc,7),make('adaptive',sc,7)];for(const S of c.sims)for(let k=0;k<300;k++)step(S,1/120);size();}
+  function size(){const dpr=Math.min(2,devicePixelRatio||1);for(const c of Object.values(cards))for(const cv of c.cv){const w=cv.clientWidth||600;cv.width=Math.round(w*dpr);cv.height=Math.round(w*9/16*dpr)}paintAll()}
+  function paint(c){c.sims.forEach((S,k)=>{draw(c.cv[k],S);const col=c.cv[k].parentElement,tot=S.share.reduce((a,b)=>a+b,0)||1;col.querySelector('[data-k="done"]').textContent=S.done;col.querySelector('[data-k="failed"]').textContent=S.failed;col.querySelector('[data-k="share"]').textContent=S.share.map(v=>Math.round(v/tot*100)+'%').join(' / ')});
+    const t=c.sims[0].t;c.el.querySelector('.f').style.width=Math.min(100,t/DUR*100)+'%';c.el.querySelector('.clock').textContent=Math.floor(t)+' s / '+DUR+' s'}
+  function paintAll(){for(const c of Object.values(cards))if(c.sims)paint(c)}
+  function frame(ts){const dt=Math.min(.05,(ts-(last||ts))/1000);last=ts;const c=cards[activeId==='how'?'intro':activeId];
+    if(c&&c.playing&&dt>0){for(const S of c.sims){const n=Math.ceil(dt*120);for(let k=0;k<n;k++)step(S,dt/n)}if(c.sims[0].t>=DUR)reset(c);paint(c)}
+    requestAnimationFrame(frame)}
+  return {init, activate(id){activeId=id;last=0;requestAnimationFrame(size)}};
+})();
+
+buildPages();
+Anim.init();
+show(location.hash.slice(1)||'overview');
+addEventListener('resize',movePill);
+loadResults().then(()=>{ if(LIVE) poll() });
+</script>
+</body>
+</html>

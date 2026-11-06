@@ -1,0 +1,11 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+.ruff_cache/
+
+# Experiment output (created when you run the experiments)
+D2/results/
+*.log
