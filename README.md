@@ -108,3 +108,4 @@ p95 after the event, error rate, server share, Jain's fairness, and (E4) how lon
 | `docs/D1-how-to-run.pdf` | How to run D1 |
 | `docs/D2-slides.pdf` | D2 presentation with the experiment results |
 | `docs/D2-files-explained.pdf` | Every D2 file explained, plus the commands and what their output means |
+# CN-proj
